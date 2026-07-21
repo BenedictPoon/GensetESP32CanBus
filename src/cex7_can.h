@@ -38,3 +38,5 @@ void cex7CanInit(Cex7CanState& state);
 void cex7CanOnFrame(Cex7CanState& state, const CanFrame& frame, GensetRegisters& regs);
 void cex7CanPrintStats(Cex7CanState& state, const GensetRegisters& regs);
 bool cex7CanTryDecodeFuel(const Cex7CanState& state, const CanFrame& frame, uint16_t& permilleOut);
+bool cex7CanTryDecodeBatteryDv(const CanFrame& frame, uint16_t& deciVoltsOut);
+bool cex7CanTryDecodeEngineHoursMinutes(const CanFrame& frame, uint32_t& totalMinutesOut);

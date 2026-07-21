@@ -29,8 +29,10 @@ void setup() {
     Serial.println(F("[FATAL] Modbus slave init failed"));
   }
 
-  Serial.println(F("Ready. Poll Modbus FC04 PDU addr 26 for fuel (‰)."));
-  Serial.println(F("Fuel mapped from CAN ID 0x0201FF05 (u16 LE @ byte 0 → ‰)."));
+  Serial.println(F("Ready. Poll Modbus FC04:"));
+  Serial.println(F("  IR 26 fuel ‰ (CAN 0x0201FF05 u16LE @0)"));
+  Serial.println(F("  IR 28 battery dV (CAN 0x0201FF05 u8 @4)"));
+  Serial.println(F("  IR 41/42 engine hours (CAN 0x0201FF13 u24LE minutes)"));
   Serial.println();
 }
 

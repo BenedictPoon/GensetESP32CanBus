@@ -92,6 +92,39 @@ bool cex7CanTryDecodeFuel(const Cex7CanState& state, const CanFrame& frame,
   return true;
 }
 
+// Battery voltage (CCMODBUS IR 28, dV): same status frame as fuel, byte 4.
+// Example: [C5 02 00 00 7B 00 00 00] → 0x7B = 123 → 12.3 V
+bool cex7CanTryDecodeBatteryDv(const CanFrame& frame, uint16_t& deciVoltsOut) {
+  static constexpr uint32_t kBatteryCanId = 0x0201FF05;
+  static constexpr uint8_t kBatteryByteIndex = 4;
+
+  if (!frame.extended || frame.id != kBatteryCanId) {
+    return false;
+  }
+  if (frame.dlc <= kBatteryByteIndex) {
+    return false;
+  }
+  deciVoltsOut = frame.data[kBatteryByteIndex];
+  return true;
+}
+
+// Engine run hours (CCMODBUS IR 41 hh + IR 42 mm:ss): minutes as 24-bit LE.
+// Example: [BC A3 04 1C ...] → 0x04A3BC = 304060 min → 5067 h + 40 min
+bool cex7CanTryDecodeEngineHoursMinutes(const CanFrame& frame, uint32_t& totalMinutesOut) {
+  static constexpr uint32_t kHoursCanId = 0x0201FF13;
+
+  if (!frame.extended || frame.id != kHoursCanId) {
+    return false;
+  }
+  if (frame.dlc < 3) {
+    return false;
+  }
+  totalMinutesOut = static_cast<uint32_t>(frame.data[0]) |
+                    (static_cast<uint32_t>(frame.data[1]) << 8) |
+                    (static_cast<uint32_t>(frame.data[2]) << 16);
+  return true;
+}
+
 #if FUEL_HUNT_ENABLE
 // Scan one frame's payload for encodings of target tank %.
 static void huntFuelInStat(const CanIdStat& st, uint16_t targetPct) {
@@ -202,6 +235,16 @@ void cex7CanOnFrame(Cex7CanState& state, const CanFrame& frame, GensetRegisters&
   if (cex7CanTryDecodeFuel(state, frame, fuel)) {
     registersSetFuelPermille(regs, fuel);
   }
+
+  uint16_t battDv = 0;
+  if (cex7CanTryDecodeBatteryDv(frame, battDv)) {
+    registersSetBatteryDv(regs, battDv);
+  }
+
+  uint32_t hoursMin = 0;
+  if (cex7CanTryDecodeEngineHoursMinutes(frame, hoursMin)) {
+    registersSetEngineHoursFromMinutes(regs, hoursMin);
+  }
 }
 
 void cex7CanPrintStats(Cex7CanState& state, const GensetRegisters& regs) {
@@ -225,6 +268,21 @@ void cex7CanPrintStats(Cex7CanState& state, const GensetRegisters& regs) {
                 regs.inputRegs[RegPdu::kIrFuelLevel], registersFuelPercent(regs),
                 regs.fuelValid ? 1 : 0, state.mappingConfigured ? 1 : 0,
                 static_cast<unsigned>(FUEL_HUNT_PERCENT));
+  Serial.printf("Batt IR[%u]=%u dV (%.1f V) valid=%d\n",
+                static_cast<unsigned>(RegPdu::kIrBatteryDv),
+                regs.inputRegs[RegPdu::kIrBatteryDv],
+                regs.inputRegs[RegPdu::kIrBatteryDv] / 10.0f,
+                regs.batteryValid ? 1 : 0);
+  {
+    const uint16_t hh = regs.inputRegs[RegPdu::kIrEngineHoursHh];
+    const uint16_t mmSs = regs.inputRegs[RegPdu::kIrEngineHoursMmSs];
+    const uint8_t mm = static_cast<uint8_t>((mmSs >> 8) & 0xFFu);
+    const uint8_t ss = static_cast<uint8_t>(mmSs & 0xFFu);
+    Serial.printf("Hours IR[%u]=%u h  IR[%u]=%02u:%02u valid=%d\n",
+                  static_cast<unsigned>(RegPdu::kIrEngineHoursHh), hh,
+                  static_cast<unsigned>(RegPdu::kIrEngineHoursMmSs), mm, ss,
+                  regs.engineHoursValid ? 1 : 0);
+  }
 
   // Sort indices by CAN ID for stable dump of ALL IDs (not just first 16)
   size_t order[kMaxTrackedIds];

@@ -22,6 +22,10 @@ struct GensetRegisters {
 
   bool fuelValid;
   uint32_t lastFuelUpdateMs;
+  bool batteryValid;
+  uint32_t lastBatteryUpdateMs;
+  bool engineHoursValid;
+  uint32_t lastEngineHoursUpdateMs;
   uint32_t canRxCount;
   uint32_t canUniqueIds;
 };
@@ -29,6 +33,8 @@ struct GensetRegisters {
 void registersInit(GensetRegisters& regs);
 void registersSetFuelPermille(GensetRegisters& regs, uint16_t permille);
 float registersFuelPercent(const GensetRegisters& regs);
+void registersSetBatteryDv(GensetRegisters& regs, uint16_t deciVolts);
+void registersSetEngineHoursFromMinutes(GensetRegisters& regs, uint32_t totalMinutes);
 
 // Named PDU addresses (Table 6 / coils / discrete)
 namespace RegPdu {
@@ -42,8 +48,11 @@ namespace RegPdu {
   // Input registers
   constexpr uint16_t kIrFuelLevel          = 26;  // ‰
   constexpr uint16_t kIrSpeedRpm           = 25;
-  constexpr uint16_t kIrBatteryDv          = 28;
+  constexpr uint16_t kIrBattAltDv          = 27;  // battery charging alternator, dV
+  constexpr uint16_t kIrBatteryDv          = 28;  // start battery voltage, dV
   constexpr uint16_t kIrSensorPresence     = 32;  // bit0 = fuel level sensor
+  constexpr uint16_t kIrEngineHoursHh      = 41;  // total engine hours (hh)
+  constexpr uint16_t kIrEngineHoursMmSs    = 42;  // LSB=sec, MSB=min
 
   // Holding (thresholds)
   constexpr uint16_t kHrFuelPumpMin        = 31;

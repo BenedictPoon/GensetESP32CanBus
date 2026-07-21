@@ -150,18 +150,18 @@ Also readable:
 
 ---
 
-## 6. Fuel CAN mapping (confirmed)
+## 6. Fuel / battery / hours CAN mapping (confirmed)
 
-Live capture matched panel **~71%** to:
+| Signal | CAN ID | Decode | Modbus (FC04) | Unit |
+|--------|--------|--------|---------------|------|
+| Fuel | `0x0201FF05` | u16 LE @ bytes 0–1 | PDU **26** | ‰ (÷10 → %) |
+| Start battery | `0x0201FF05` | u8 @ byte 4 | PDU **28** | dV (÷10 → V) |
+| Engine hours | `0x0201FF13` | u24 LE @ bytes 0–2 (minutes) | PDU **41** hours, **42** mm:ss | hh + packed mm:ss |
 
-| Field | Value |
-|-------|-------|
-| CAN ID | `0x0201FF05` (29-bit extended) |
-| Bytes | 0–1 little-endian |
-| Example | `C5 02` → `0x02C5` = **709 ‰** = **70.9%** |
-| Modbus | Input Register PDU **26** (same as CCMODBUS) |
-
-Firmware already maps this into IR[26]. RS485 Modbus masters (and Node-RED via a Modbus RTU node) read slave `0x57`, FC04, address 26.
+Examples from capture:
+- Fuel `C5 02` → 709 ‰ ≈ 70.9%
+- Battery `7B` → 123 dV = 12.3 V
+- Hours `BC A3 04` → 304060 min ≈ 5067 h + 40 min
 
 ### Older reverse-engineering notes
 

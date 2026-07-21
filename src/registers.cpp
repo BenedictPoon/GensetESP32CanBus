@@ -18,6 +18,8 @@ void registersInit(GensetRegisters& regs) {
   regs.holding[RegPdu::kHrLowFuelLevel] = 10;  // 0–30
 
   regs.fuelValid = false;
+  regs.batteryValid = false;
+  regs.engineHoursValid = false;
 }
 
 void registersSetFuelPermille(GensetRegisters& regs, uint16_t permille) {
@@ -40,4 +42,24 @@ void registersSetFuelPermille(GensetRegisters& regs, uint16_t permille) {
 
 float registersFuelPercent(const GensetRegisters& regs) {
   return regs.inputRegs[RegPdu::kIrFuelLevel] / 10.0f;
+}
+
+void registersSetBatteryDv(GensetRegisters& regs, uint16_t deciVolts) {
+  // CCMODBUS Input Register PDU 28: battery voltage in dV (12.3 V → 123)
+  regs.inputRegs[RegPdu::kIrBatteryDv] = deciVolts;
+  regs.batteryValid = true;
+  regs.lastBatteryUpdateMs = millis();
+}
+
+void registersSetEngineHoursFromMinutes(GensetRegisters& regs, uint32_t totalMinutes) {
+  // CCMODBUS: IR 41 = hours (hh), IR 42 = mm:ss (LSB=sec, MSB=min)
+  const uint32_t hours = totalMinutes / 60u;
+  const uint32_t remMin = totalMinutes % 60u;
+  const uint16_t hh = hours > 0xFFFFu ? 0xFFFFu : static_cast<uint16_t>(hours);
+  const uint16_t mmSs = static_cast<uint16_t>((remMin & 0xFFu) << 8);  // sec=0
+
+  regs.inputRegs[RegPdu::kIrEngineHoursHh] = hh;
+  regs.inputRegs[RegPdu::kIrEngineHoursMmSs] = mmSs;
+  regs.engineHoursValid = true;
+  regs.lastEngineHoursUpdateMs = millis();
 }

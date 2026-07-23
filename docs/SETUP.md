@@ -158,6 +158,8 @@ Also readable:
 | Start battery | `0x0201FF05` | u8 @ byte 4 | FC04 PDU **28** | dV (÷10 → V) |
 | Engine RPM | `0x0201FF05` | u16 LE @ bytes 6–7 | FC04 PDU **25** | rpm (telemetry only) |
 | Start-up / Stop | `0x0201F320` / `0x0201FF20` | byte0 **bit6** (`0x40`): set=stopped | FC01 coil **1** / **2** | Start=`!bit6`, Stop=`bit6` |
+| CoolDown | `0x0201F320` / `0x0201FF20` | latch: byte1=`2C` + byte2 bit4 clear → until Stop | FC01 coil **3** | 1 while panel Cool Down |
+| CoolDownTimer | `0x0201FF14` | byte4 countdown (~1 s/step) | FC04 PDU **29** | seconds (0 if not cooling) |
 | Engine hours | `0x0201FF13` | u24 LE minutes @ 0–2 | FC04 PDU **41** / **42** | hh + mm:ss |
 
 Examples from capture:
@@ -174,13 +176,16 @@ Corroborating (not used for coils):
 
 If you need to re-hunt another signal, set `-DFUEL_HUNT_ENABLE=1` in `platformio.ini` and use the workflow below.
 
-### Start-up / Stop coils (CCMODBUS PDU 1 / 2)
+### Start-up / Stop / CoolDown coils
 
 Reads (not commands):
 - Coil **1** Start-up → `1` if genset is **operating** (`F320` byte0 bit6 clear)
 - Coil **2** Stop → `1` if genset is **stopped** (`F320` byte0 bit6 set)
+- Coil **3** CoolDown → `1` while cool-down is active (latched until Stop; **extension**)
 
-Node-RED: FC **1**, address **1**, quantity **2** → `msg.payload = [startUp, stop]`.
+Node-RED: FC **1**, address **1**, quantity **3** → `msg.payload = [startUp, stop, coolDown]`.
+
+Optional: FC **4**, address **29**, quantity **1** → cool-down seconds remaining.
 
 RPM (IR25) is independent telemetry and does **not** drive these coils.
 

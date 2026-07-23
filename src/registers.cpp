@@ -20,6 +20,9 @@ void registersInit(GensetRegisters& regs) {
   regs.fuelValid = false;
   regs.batteryValid = false;
   regs.engineHoursValid = false;
+  regs.coolDown = false;
+  regs.coolDownTimer = 0;
+  regs.coolDownTimerValid = false;
 }
 
 void registersSetFuelPermille(GensetRegisters& regs, uint16_t permille) {
@@ -73,4 +76,23 @@ void registersSetRunState(GensetRegisters& regs, bool operating) {
   // CCMODBUS coils PDU 1 Start-up / PDU 2 Stop — mutually exclusive read status
   regs.coils[RegPdu::kCoilStartUp] = operating;
   regs.coils[RegPdu::kCoilStop] = !operating;
+}
+
+void registersSetCoolDown(GensetRegisters& regs, bool coolDown) {
+  regs.coolDown = coolDown;
+  // Modbus FC01 coil PDU 3 — read status for Node-RED (does not affect Start/Stop)
+  regs.coils[RegPdu::kCoilCoolDown] = coolDown;
+  if (!coolDown) {
+    regs.inputRegs[RegPdu::kIrCoolDownTimer] = 0;
+  } else if (regs.coolDownTimerValid) {
+    regs.inputRegs[RegPdu::kIrCoolDownTimer] = regs.coolDownTimer;
+  }
+}
+
+void registersSetCoolDownTimer(GensetRegisters& regs, uint8_t secondsRemaining) {
+  regs.coolDownTimer = secondsRemaining;
+  regs.coolDownTimerValid = true;
+  // Modbus FC04 IR PDU 29 — remaining seconds (0 when idle / unknown)
+  regs.inputRegs[RegPdu::kIrCoolDownTimer] =
+      regs.coolDown ? secondsRemaining : 0;
 }

@@ -20,6 +20,13 @@ void cex7CanInit(Cex7CanState& state) {
   state.fuelScaleNum = 1;
   state.fuelScaleDen = 1;
   state.lastPrintMs = millis();
+  for (size_t i = 0; i < kCoolCandSlots; ++i) {
+    state.coolCand[i].id = 0;
+    state.coolCand[i].lastDlc = 0;
+    state.coolCand[i].valid = false;
+  }
+  state.lastCoolDownPrintedValid = false;
+  state.lastCoolDownPrinted = false;
 }
 
 static void trackId(Cex7CanState& state, const CanFrame& frame) {
@@ -160,6 +167,167 @@ bool cex7CanTryDecodeRunState(const CanFrame& frame, bool& operatingOut) {
   return true;
 }
 
+// CoolDown start pulse on F320/FF20 (does not touch Start/Stop).
+// byte2 bit4 clear while byte1==2C is a short pulse (cool-down timer start),
+// not the whole cool-down interval — caller must latch until Stop.
+// Returns true when this frame should update CoolDown (set pulse or clear on Stop).
+// Returns false while Start=1 but pulse ended — keep existing latched CoolDown.
+bool cex7CanTryDecodeCoolDown(const CanFrame& frame, bool& coolDownOut) {
+  static constexpr uint32_t kPhaseCanIdA = 0x0201F320;
+  static constexpr uint32_t kPhaseCanIdB = 0x0201FF20;
+  static constexpr uint8_t kStoppedBitMask = 0x40;
+  static constexpr uint8_t kCoolModeByte1 = 0x2C;
+  static constexpr uint8_t kCoolTimerStartBit = 0x10;  // byte2: clear = timer start pulse
+
+  if (!frame.extended || (frame.id != kPhaseCanIdA && frame.id != kPhaseCanIdB)) {
+    return false;
+  }
+  if (frame.dlc < 3) {
+    return false;
+  }
+  const bool operating = (frame.data[0] & kStoppedBitMask) == 0;
+  if (!operating) {
+    coolDownOut = false;  // Stop ends cool-down latch
+    return true;
+  }
+  const bool startPulse =
+      (frame.data[1] == kCoolModeByte1) &&
+      ((frame.data[2] & kCoolTimerStartBit) == 0);
+  if (startPulse) {
+    coolDownOut = true;  // arm / refresh latch
+    return true;
+  }
+  return false;  // still Start=1, pulse over — keep latched value
+}
+
+// Cool-down remaining seconds: 0x0201FF14 byte4 counts down (e.g. B3→00 ≈ 179 s).
+// Example: [33 02 08 00 3D 00 00 00] → [33 02 08 00 3C 00 00 00]
+bool cex7CanTryDecodeCoolDownTimer(const CanFrame& frame, uint8_t& timerOut) {
+  static constexpr uint32_t kTimerCanId = 0x0201FF14;
+  static constexpr uint8_t kTimerByteIndex = 4;
+
+  if (!frame.extended || frame.id != kTimerCanId) {
+    return false;
+  }
+  if (frame.dlc <= kTimerByteIndex) {
+    return false;
+  }
+  timerOut = frame.data[kTimerByteIndex];
+  return true;
+}
+
+#if COOLDOWN_CAND_WATCH
+// Focus IDs while CoolDown latched — find sustained cool-down signal.
+static bool isCoolCandId(uint32_t id) {
+  return id == 0x00010600u || id == 0x0201F320u || id == 0x0201FF20u ||
+         id == 0x0201FF14u || id == 0x0201FF00u || id == 0x0201FF24u;
+}
+
+static void coolCandWatch(Cex7CanState& state, const CanFrame& frame,
+                          const GensetRegisters& regs) {
+  // Only log changes while CoolDown is latched (or on the Stop edge)
+  static bool wasCoolOrStop = false;
+  const bool coolOrStop = regs.coolDown || regs.coils[RegPdu::kCoilStop];
+  if (!coolOrStop && !wasCoolOrStop) {
+    // Still seed first samples of focus IDs so first cool change has a "was"
+    if (!frame.extended || !isCoolCandId(frame.id)) {
+      return;
+    }
+  }
+  wasCoolOrStop = coolOrStop;
+
+  if (!frame.extended || !isCoolCandId(frame.id)) {
+    return;
+  }
+  // Skip spam unless CoolDown latched or Stop (capture cool→stop window)
+  if (!regs.coolDown && !regs.coils[RegPdu::kCoilStop]) {
+    // Update slot silently so first CoolDown change has baseline
+    CoolCandSlot* slot = nullptr;
+    for (size_t i = 0; i < kCoolCandSlots; ++i) {
+      if (state.coolCand[i].valid && state.coolCand[i].id == frame.id) {
+        slot = &state.coolCand[i];
+        break;
+      }
+    }
+    if (slot == nullptr) {
+      for (size_t i = 0; i < kCoolCandSlots; ++i) {
+        if (!state.coolCand[i].valid) {
+          slot = &state.coolCand[i];
+          slot->id = frame.id;
+          slot->valid = true;
+          break;
+        }
+      }
+    }
+    if (slot != nullptr) {
+      const uint8_t n = frame.dlc > 8 ? 8 : frame.dlc;
+      memcpy(slot->lastData, frame.data, n);
+      slot->lastDlc = n;
+    }
+    return;
+  }
+
+  CoolCandSlot* slot = nullptr;
+  for (size_t i = 0; i < kCoolCandSlots; ++i) {
+    if (state.coolCand[i].valid && state.coolCand[i].id == frame.id) {
+      slot = &state.coolCand[i];
+      break;
+    }
+  }
+  if (slot == nullptr) {
+    for (size_t i = 0; i < kCoolCandSlots; ++i) {
+      if (!state.coolCand[i].valid) {
+        slot = &state.coolCand[i];
+        slot->id = frame.id;
+        slot->valid = true;
+        slot->lastDlc = 0;
+        break;
+      }
+    }
+  }
+  if (slot == nullptr) {
+    return;
+  }
+
+  const uint8_t n = frame.dlc > 8 ? 8 : frame.dlc;
+  const bool changed =
+      (slot->lastDlc != n) || (memcmp(slot->lastData, frame.data, n) != 0);
+  if (!changed) {
+    return;
+  }
+
+  Serial.printf("[CAND] 0x%08lX ", static_cast<unsigned long>(frame.id));
+  if (slot->lastDlc > 0) {
+    for (uint8_t i = 0; i < slot->lastDlc; ++i) {
+      Serial.printf("%02X", slot->lastData[i]);
+      if (i + 1 < slot->lastDlc) {
+        Serial.print(' ');
+      }
+    }
+    Serial.print(F(" → "));
+  }
+  for (uint8_t i = 0; i < n; ++i) {
+    Serial.printf("%02X", frame.data[i]);
+    if (i + 1 < n) {
+      Serial.print(' ');
+    }
+  }
+  if (frame.id == 0x0201F320u || frame.id == 0x0201FF20u) {
+    Serial.printf("  bit6=%u byte1=%02X byte2=%02X",
+                  (frame.data[0] >> 6) & 1u,
+                  (n > 1) ? frame.data[1] : 0,
+                  (n > 2) ? frame.data[2] : 0);
+  }
+  Serial.printf("  | Start=%d Stop=%d CoolDown=%d\n",
+                regs.coils[RegPdu::kCoilStartUp] ? 1 : 0,
+                regs.coils[RegPdu::kCoilStop] ? 1 : 0,
+                regs.coolDown ? 1 : 0);
+
+  memcpy(slot->lastData, frame.data, n);
+  slot->lastDlc = n;
+}
+#endif
+
 #if FUEL_HUNT_ENABLE
 // Scan one frame's payload for encodings of target tank %.
 static void huntFuelInStat(const CanIdStat& st, uint16_t targetPct) {
@@ -247,64 +415,97 @@ static void huntFuelInStat(const CanIdStat& st, uint16_t targetPct) {
 #endif
 
 void cex7CanOnFrame(Cex7CanState& state, const CanFrame& frame, GensetRegisters& regs) {
-  // Known IDs only: status (fuel/batt/rpm), hours, run-state phase
+#if RUN_STATE_HUNT_ENABLE || FUEL_HUNT_ENABLE
+  pushRing(state, frame);
+  trackId(state, frame);
+  state.framesSincePrint++;
+  regs.canRxCount = canTwaiRxCount();
+  regs.canUniqueIds = state.uniqueIdCount;
+#endif
+
+  // Known IDs for decode (Start/Stop still from F320 bit6 — do not alter)
   static constexpr uint32_t kStatusCanId = 0x0201FF05;
   static constexpr uint32_t kHoursCanId = 0x0201FF13;
   static constexpr uint32_t kPhaseCanIdA = 0x0201F320;
   static constexpr uint32_t kPhaseCanIdB = 0x0201FF20;
+  static constexpr uint32_t kTimerCanId = 0x0201FF14;
 
-  const bool known = frame.extended &&
-                     (frame.id == kStatusCanId || frame.id == kHoursCanId ||
-                      frame.id == kPhaseCanIdA || frame.id == kPhaseCanIdB);
-  if (!known) {
-    return;
-  }
+  const bool decodeId = frame.extended &&
+                        (frame.id == kStatusCanId || frame.id == kHoursCanId ||
+                         frame.id == kPhaseCanIdA || frame.id == kPhaseCanIdB ||
+                         frame.id == kTimerCanId);
 
-#if RUN_STATE_HUNT_ENABLE || FUEL_HUNT_ENABLE
-  pushRing(state, frame);
-  trackId(state, frame);
+  if (decodeId) {
+#if !(RUN_STATE_HUNT_ENABLE || FUEL_HUNT_ENABLE)
+    state.framesSincePrint++;
+    regs.canRxCount = canTwaiRxCount();
+    regs.canUniqueIds = state.uniqueIdCount;
 #endif
-  state.framesSincePrint++;
-  regs.canRxCount = canTwaiRxCount();
-  regs.canUniqueIds = state.uniqueIdCount;
 
-#if CAN_LOG_EVERY_FRAME
-  Serial.printf("[CAN] %s ID=0x%08lX DLC=%u DATA=",
-                frame.extended ? "EXT" : "STD",
-                static_cast<unsigned long>(frame.id), frame.dlc);
-  for (uint8_t i = 0; i < frame.dlc; ++i) {
-    Serial.printf("%02X", frame.data[i]);
-    if (i + 1 < frame.dlc) {
-      Serial.print(' ');
+    uint16_t fuel = 0;
+    if (cex7CanTryDecodeFuel(state, frame, fuel)) {
+      registersSetFuelPermille(regs, fuel);
+    }
+
+    uint16_t battDv = 0;
+    if (cex7CanTryDecodeBatteryDv(frame, battDv)) {
+      registersSetBatteryDv(regs, battDv);
+    }
+
+    uint32_t hoursMin = 0;
+    if (cex7CanTryDecodeEngineHoursMinutes(frame, hoursMin)) {
+      registersSetEngineHoursFromMinutes(regs, hoursMin);
+    }
+
+    uint16_t rpm = 0;
+    if (cex7CanTryDecodeEngineRpm(frame, rpm)) {
+      registersSetEngineRpm(regs, rpm);  // IR25 only — does not set Start/Stop
+    }
+
+    bool operating = false;
+    if (cex7CanTryDecodeRunState(frame, operating)) {
+      registersSetRunState(regs, operating);  // coils 1/2 from F320 bit6 only
+    }
+
+#if COOLDOWN_MAP_ENABLE
+    bool coolDown = false;
+    if (cex7CanTryDecodeCoolDown(frame, coolDown)) {
+      const bool prev = regs.coolDown;
+      registersSetCoolDown(regs, coolDown);
+      if (!state.lastCoolDownPrintedValid || coolDown != prev) {
+        Serial.printf("[NOTE] CoolDown %d→%d  (Start=%d Stop=%d  latch until Stop)\n",
+                      prev ? 1 : 0, coolDown ? 1 : 0,
+                      regs.coils[RegPdu::kCoilStartUp] ? 1 : 0,
+                      regs.coils[RegPdu::kCoilStop] ? 1 : 0);
+        state.lastCoolDownPrinted = coolDown;
+        state.lastCoolDownPrintedValid = true;
+      }
+    }
+#else
+    registersSetCoolDown(regs, false);
+#endif
+
+    // Always decode FF14 timer for Modbus IR 29 (Serial notes only if enabled)
+    uint8_t coolTimer = 0;
+    if (cex7CanTryDecodeCoolDownTimer(frame, coolTimer)) {
+#if COOLDOWN_TIMER_ENABLE
+      const uint8_t prevT = regs.coolDownTimer;
+      const bool hadT = regs.coolDownTimerValid;
+#endif
+      registersSetCoolDownTimer(regs, coolTimer);
+#if COOLDOWN_TIMER_ENABLE
+      if (!hadT || (prevT == 0 && coolTimer != 0) ||
+          (regs.coolDown && coolTimer == 0 && prevT != 0)) {
+        Serial.printf("[NOTE] CoolDownTimer=%u (0x%02X)  CoolDown=%d\n",
+                      coolTimer, coolTimer, regs.coolDown ? 1 : 0);
+      }
+#endif
     }
   }
-  Serial.println();
+
+#if COOLDOWN_CAND_WATCH
+  coolCandWatch(state, frame, regs);
 #endif
-
-  uint16_t fuel = 0;
-  if (cex7CanTryDecodeFuel(state, frame, fuel)) {
-    registersSetFuelPermille(regs, fuel);
-  }
-
-  uint16_t battDv = 0;
-  if (cex7CanTryDecodeBatteryDv(frame, battDv)) {
-    registersSetBatteryDv(regs, battDv);
-  }
-
-  uint32_t hoursMin = 0;
-  if (cex7CanTryDecodeEngineHoursMinutes(frame, hoursMin)) {
-    registersSetEngineHoursFromMinutes(regs, hoursMin);
-  }
-
-  uint16_t rpm = 0;
-  if (cex7CanTryDecodeEngineRpm(frame, rpm)) {
-    registersSetEngineRpm(regs, rpm);  // IR25 only — does not set Start/Stop
-  }
-
-  bool operating = false;
-  if (cex7CanTryDecodeRunState(frame, operating)) {
-    registersSetRunState(regs, operating);  // coils 1/2 from F320 bit6
-  }
 }
 
 void cex7CanPrintStats(Cex7CanState& state, const GensetRegisters& regs) {
@@ -316,34 +517,117 @@ void cex7CanPrintStats(Cex7CanState& state, const GensetRegisters& regs) {
   const uint32_t elapsed = now - state.lastPrintMs;
   const float fps = elapsed > 0 ? (state.framesSincePrint * 1000.0f) / elapsed : 0.0f;
 
-  // Slim production status (no full ID dump / hunt)
   Serial.println(F("---- status ----"));
-  Serial.printf("CAN rx=%lu tx=%lu err=%lu mapped_fps=%.1f listen_only=%d\n",
-                static_cast<unsigned long>(canTwaiRxCount()),
-                static_cast<unsigned long>(canTwaiTxCount()),
-                static_cast<unsigned long>(canTwaiErrorCount()), fps,
-                canTwaiIsListenOnly() ? 1 : 0);
-  Serial.printf("Fuel IR[%u]=%u ‰ (%.1f%%)  Batt IR[%u]=%u dV (%.1f V)\n",
-                static_cast<unsigned>(RegPdu::kIrFuelLevel),
-                regs.inputRegs[RegPdu::kIrFuelLevel], registersFuelPercent(regs),
-                static_cast<unsigned>(RegPdu::kIrBatteryDv),
-                regs.inputRegs[RegPdu::kIrBatteryDv],
-                regs.inputRegs[RegPdu::kIrBatteryDv] / 10.0f);
-  Serial.printf("RPM  IR[%u]=%u\n",
-                static_cast<unsigned>(RegPdu::kIrSpeedRpm),
-                regs.inputRegs[RegPdu::kIrSpeedRpm]);
-  Serial.printf("Start=%d Stop=%d  (from F320/FF20 byte0 bit6)\n",
+  Serial.printf("CAN rx=%lu fps=%.1f\n",
+                static_cast<unsigned long>(canTwaiRxCount()), fps);
+  Serial.printf("Fuel=%u‰  Batt=%.1fV  RPM=%u  Hours=%uh\n",
+                regs.inputRegs[RegPdu::kIrFuelLevel],
+                regs.inputRegs[RegPdu::kIrBatteryDv] / 10.0f,
+                regs.inputRegs[RegPdu::kIrSpeedRpm],
+                regs.inputRegs[RegPdu::kIrEngineHoursHh]);
+  Serial.printf("Start=%d  Stop=%d  CoolDown=%d",
                 regs.coils[RegPdu::kCoilStartUp] ? 1 : 0,
-                regs.coils[RegPdu::kCoilStop] ? 1 : 0);
-  {
-    const uint16_t hh = regs.inputRegs[RegPdu::kIrEngineHoursHh];
-    const uint16_t mmSs = regs.inputRegs[RegPdu::kIrEngineHoursMmSs];
-    const uint8_t mm = static_cast<uint8_t>((mmSs >> 8) & 0xFFu);
-    const uint8_t ss = static_cast<uint8_t>(mmSs & 0xFFu);
-    Serial.printf("Hours IR[%u]=%u h  IR[%u]=%02u:%02u\n",
-                  static_cast<unsigned>(RegPdu::kIrEngineHoursHh), hh,
-                  static_cast<unsigned>(RegPdu::kIrEngineHoursMmSs), mm, ss);
+                regs.coils[RegPdu::kCoilStop] ? 1 : 0,
+                regs.coolDown ? 1 : 0);
+#if COOLDOWN_TIMER_ENABLE
+  if (regs.coolDownTimerValid) {
+    Serial.printf("  CoolDownTimer=%u", regs.coolDownTimer);
+  } else {
+    Serial.print(F("  CoolDownTimer=?"));
   }
+#endif
+  Serial.println();
+
+#if RUN_STATE_HUNT_ENABLE
+  Serial.println(F("COOL-DOWN HUNT: Start=1, press Stop on panel, paste RUNNING/COOLING/STOPPED blocks"));
+
+  // Sort all tracked IDs
+  size_t order[kMaxTrackedIds];
+  size_t nUsed = 0;
+  for (size_t i = 0; i < kMaxTrackedIds; ++i) {
+    if (state.idStats[i].used) {
+      order[nUsed++] = i;
+    }
+  }
+  for (size_t a = 0; a + 1 < nUsed; ++a) {
+    for (size_t b = a + 1; b < nUsed; ++b) {
+      if (state.idStats[order[b]].id < state.idStats[order[a]].id) {
+        const size_t tmp = order[a];
+        order[a] = order[b];
+        order[b] = tmp;
+      }
+    }
+  }
+
+  Serial.printf("CAN IDs ALL (%u):\n", static_cast<unsigned>(nUsed));
+  for (size_t k = 0; k < nUsed; ++k) {
+    const CanIdStat& st = state.idStats[order[k]];
+    Serial.printf("  0x%08lX [", static_cast<unsigned long>(st.id));
+    for (uint8_t b = 0; b < st.lastDlc; ++b) {
+      Serial.printf("%02X", st.lastData[b]);
+      if (b + 1 < st.lastDlc) {
+        Serial.print(' ');
+      }
+    }
+    Serial.println(']');
+  }
+
+  Serial.println(F("CHANGED since last status (noisy clock/hours filtered):"));
+  size_t changeCount = 0;
+  for (size_t k = 0; k < nUsed; ++k) {
+    CanIdStat& st = state.idStats[order[k]];
+    if (!st.prevValid) {
+      continue;
+    }
+    if (st.id == 0x0002F101u || st.id == 0x0201FF13u) {
+      memcpy(st.prevData, st.lastData, 8);
+      st.prevDlc = st.lastDlc;
+      continue;
+    }
+    const uint8_t maxLen = st.lastDlc > st.prevDlc ? st.lastDlc : st.prevDlc;
+    bool changed = (st.lastDlc != st.prevDlc);
+    uint8_t xorBuf[8] = {};
+    for (uint8_t i = 0; i < maxLen; ++i) {
+      const uint8_t a = (i < st.prevDlc) ? st.prevData[i] : 0;
+      const uint8_t b = (i < st.lastDlc) ? st.lastData[i] : 0;
+      xorBuf[i] = static_cast<uint8_t>(a ^ b);
+      if (xorBuf[i] != 0) {
+        changed = true;
+      }
+    }
+    if (!changed) {
+      continue;
+    }
+    ++changeCount;
+    Serial.printf("  CHANGED 0x%08lX was=[", static_cast<unsigned long>(st.id));
+    for (uint8_t i = 0; i < st.prevDlc; ++i) {
+      Serial.printf("%02X", st.prevData[i]);
+      if (i + 1 < st.prevDlc) {
+        Serial.print(' ');
+      }
+    }
+    Serial.print(F("] now=["));
+    for (uint8_t i = 0; i < st.lastDlc; ++i) {
+      Serial.printf("%02X", st.lastData[i]);
+      if (i + 1 < st.lastDlc) {
+        Serial.print(' ');
+      }
+    }
+    Serial.println(']');
+  }
+  if (changeCount == 0) {
+    Serial.println(F("  (no non-ticker changes)"));
+  }
+
+  for (size_t i = 0; i < kMaxTrackedIds; ++i) {
+    if (!state.idStats[i].used) {
+      continue;
+    }
+    memcpy(state.idStats[i].prevData, state.idStats[i].lastData, 8);
+    state.idStats[i].prevDlc = state.idStats[i].lastDlc;
+    state.idStats[i].prevValid = true;
+  }
+#endif
 
   state.framesSincePrint = 0;
   state.lastPrintMs = now;

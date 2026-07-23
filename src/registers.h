@@ -26,6 +26,11 @@ struct GensetRegisters {
   uint32_t lastBatteryUpdateMs;
   bool engineHoursValid;
   uint32_t lastEngineHoursUpdateMs;
+  // Serial + Modbus: panel Cool Down while Start still 1 (coil PDU 3)
+  bool coolDown;
+  // Cool-down countdown from 0x0201FF14 byte4 (IR PDU 29 when valid)
+  uint8_t coolDownTimer;
+  bool coolDownTimerValid;
   uint32_t canRxCount;
   uint32_t canUniqueIds;
 };
@@ -38,6 +43,9 @@ void registersSetEngineHoursFromMinutes(GensetRegisters& regs, uint32_t totalMin
 void registersSetEngineRpm(GensetRegisters& regs, uint16_t rpm);
 // Start/Stop coils from CAN status bit (not RPM).
 void registersSetRunState(GensetRegisters& regs, bool operating);
+// CoolDown — does not touch Start/Stop coils.
+void registersSetCoolDown(GensetRegisters& regs, bool coolDown);
+void registersSetCoolDownTimer(GensetRegisters& regs, uint8_t secondsRemaining);
 
 // Named PDU addresses (Table 6 / coils / discrete)
 namespace RegPdu {
@@ -45,6 +53,7 @@ namespace RegPdu {
   constexpr uint16_t kCoilReset            = 0;
   constexpr uint16_t kCoilStartUp          = 1;  // 1 = genset operating (read)
   constexpr uint16_t kCoilStop             = 2;  // 1 = genset stopped (read)
+  constexpr uint16_t kCoilCoolDown         = 3;  // 1 = cool-down active (read; extension)
   constexpr uint16_t kCoilFuelTransferPump = 7;
 
   // Discrete / input status
@@ -56,6 +65,7 @@ namespace RegPdu {
   constexpr uint16_t kIrSpeedRpm           = 25;
   constexpr uint16_t kIrBattAltDv          = 27;  // battery charging alternator, dV
   constexpr uint16_t kIrBatteryDv          = 28;  // start battery voltage, dV
+  constexpr uint16_t kIrCoolDownTimer      = 29;  // cool-down remaining seconds (extension)
   constexpr uint16_t kIrSensorPresence     = 32;  // bit0 = fuel level sensor
   constexpr uint16_t kIrEngineHoursHh      = 41;  // total engine hours (hh)
   constexpr uint16_t kIrEngineHoursMmSs    = 42;  // LSB=sec, MSB=min

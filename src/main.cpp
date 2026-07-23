@@ -32,10 +32,10 @@ void setup() {
   modbusSlaveSyncFromRegisters(gRegs);
 
   Serial.println(F("Ready. Poll Modbus FC04 / FC01:"));
-  Serial.println(F("  IR 26 fuel ‰ | IR 28 batt dV | IR 25 rpm"));
-  Serial.println(F("  FC01 addr 1 qty 2 → [Start, Stop]  (F320 bit6, not RPM)"));
+  Serial.println(F("  IR 26 fuel ‰ | IR 28 batt dV | IR 25 rpm | IR 29 CoolDownTimer s"));
+  Serial.println(F("  FC01 addr 1 qty 3 → [Start, Stop, CoolDown]"));
   Serial.println(F("  IR 41/42 engine hours"));
-  Serial.println(F("CAN: FF05 fuel/batt/rpm | FF13 hours | F320/FF20 Start/Stop"));
+  Serial.println(F("CoolDown coil 3: latched on F320 pulse until Stop"));
   Serial.println();
 }
 

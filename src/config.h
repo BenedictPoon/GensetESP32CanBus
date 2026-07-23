@@ -33,8 +33,22 @@ static constexpr uint32_t kCanSniffPrintMs = 500;
 #define FUEL_HUNT_ENABLE 0
 #endif
 
-// Diff-hunt for Start-up / Stop coil status (CCMODBUS coils PDU 1 / 2).
-// Toggle genset run/stop and watch Serial for CHANGED IDs / bit flips.
+// Quiet cand watch during cool-down discovery (noisy). Keep 0 once mapped.
+#ifndef COOLDOWN_CAND_WATCH
+#define COOLDOWN_CAND_WATCH 0
+#endif
+
+// CoolDown latch on F320 timer-start pulse until Stop. Does not change Start/Stop.
+#ifndef COOLDOWN_MAP_ENABLE
+#define COOLDOWN_MAP_ENABLE 1
+#endif
+
+// Optional CoolDownTimer from 0x0201FF14 byte4 countdown (set 1 to enable).
+#ifndef COOLDOWN_TIMER_ENABLE
+#define COOLDOWN_TIMER_ENABLE 0
+#endif
+
+// Full-bus sniffer + payload diffs. Keep 0 for slim status view.
 #ifndef RUN_STATE_HUNT_ENABLE
 #define RUN_STATE_HUNT_ENABLE 0
 #endif

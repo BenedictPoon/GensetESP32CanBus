@@ -5,6 +5,7 @@
 
 static constexpr size_t kCanRingSize = 64;
 static constexpr size_t kMaxTrackedIds = 64;
+static constexpr size_t kCoolCandSlots = 10;
 
 struct CanIdStat {
   uint32_t id;
@@ -16,6 +17,13 @@ struct CanIdStat {
   bool prevValid;
   bool extended;
   bool used;
+};
+
+struct CoolCandSlot {
+  uint32_t id;
+  uint8_t lastData[8];
+  uint8_t lastDlc;
+  bool valid;
 };
 
 struct Cex7CanState {
@@ -35,6 +43,9 @@ struct Cex7CanState {
   bool fuelLittleEndian;
   uint16_t fuelScaleNum;   // raw * num / den → ‰
   uint16_t fuelScaleDen;
+  CoolCandSlot coolCand[kCoolCandSlots];
+  bool lastCoolDownPrintedValid;
+  bool lastCoolDownPrinted;
 };
 
 void cex7CanInit(Cex7CanState& state);
@@ -46,3 +57,7 @@ bool cex7CanTryDecodeEngineHoursMinutes(const CanFrame& frame, uint32_t& totalMi
 bool cex7CanTryDecodeEngineRpm(const CanFrame& frame, uint16_t& rpmOut);
 // Start/Stop from 0x0201F320 / 0x0201FF20 byte0 bit6 (0x40): set=stopped
 bool cex7CanTryDecodeRunState(const CanFrame& frame, bool& operatingOut);
+// CoolDown: latch on F320 timer-start pulse until Stop (does not touch Start/Stop)
+bool cex7CanTryDecodeCoolDown(const CanFrame& frame, bool& coolDownOut);
+// Cool-down countdown seconds from 0x0201FF14 byte4 (optional)
+bool cex7CanTryDecodeCoolDownTimer(const CanFrame& frame, uint8_t& timerOut);

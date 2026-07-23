@@ -51,17 +51,18 @@ void registersSetCoolDownTimer(GensetRegisters& regs, uint8_t secondsRemaining);
 
 // Named PDU addresses (Table 6 / coils / discrete)
 namespace RegPdu {
-  // Coils
+  // Coils — live read order for Node-RED qty 5 from addr 1:
+  //   [Start, Stop, CoolDown, Automatic, Manual]
+  // CoolDown stays on PDU 3 with Start/Stop (unchanged decode). Auto/Manual are
+  // additional on 4/5 (same F320 bits as CCMODBUS Auto/Manual; PDF put those on 3/4).
   constexpr uint16_t kCoilReset            = 0;
   constexpr uint16_t kCoilStartUp          = 1;  // 1 = genset operating (read)
   constexpr uint16_t kCoilStop             = 2;  // 1 = genset stopped (read)
-  constexpr uint16_t kCoilAutomatic        = 3;  // CCMODBUS: 1 = automatic (F320 byte0 bit3)
-  constexpr uint16_t kCoilManual           = 4;  // CCMODBUS: 1 = manual (F320 byte0 bit2)
-  constexpr uint16_t kCoilTestMode         = 5;  // CCMODBUS: 1 = test mode (unmapped)
-  constexpr uint16_t kCoilLockedMode       = 6;  // CCMODBUS: 1 = lock mode (unmapped)
+  constexpr uint16_t kCoilCoolDown         = 3;  // 1 = cool-down active (read; extension)
+  constexpr uint16_t kCoilAutomatic        = 4;  // 1 = automatic (F320 byte0 bit3)
+  constexpr uint16_t kCoilManual           = 5;  // 1 = manual (F320 byte0 bit2)
+  constexpr uint16_t kCoilLockedMode       = 6;  // CCMODBUS: lock mode (unmapped)
   constexpr uint16_t kCoilFuelTransferPump = 7;
-  // Extension (not in CCMODBUS table) — was briefly on PDU 3; moved to avoid Auto clash
-  constexpr uint16_t kCoilCoolDown         = 15; // 1 = cool-down active (read)
 
   // Discrete / input status
   constexpr uint16_t kDiscreteFuelReserve  = 6;

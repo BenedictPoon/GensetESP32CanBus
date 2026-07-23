@@ -158,8 +158,8 @@ Also readable:
 | Start battery | `0x0201FF05` | u8 @ byte 4 | FC04 PDU **28** | dV (÷10 → V) |
 | Engine RPM | `0x0201FF05` | u16 LE @ bytes 6–7 | FC04 PDU **25** | rpm (telemetry only) |
 | Start-up / Stop | `0x0201F320` / `0x0201FF20` | byte0 **bit6** (`0x40`): set=stopped | FC01 coil **1** / **2** | Start=`!bit6`, Stop=`bit6` |
-| Automatic / Manual | `0x0201F320` / `0x0201FF20` | byte0 **bit3** Auto / **bit2** Manual | FC01 coil **3** / **4** | **confirmed** |
-| CoolDown | `0x0201F320` / `0x0201FF20` | latch: byte1=`2C` + byte2 bit4 clear → until Stop | FC01 coil **15** | 1 while panel Cool Down (extension) |
+| CoolDown | `0x0201F320` / `0x0201FF20` | latch: byte1=`2C` + byte2 bit4 clear → until Stop | FC01 coil **3** | 1 while panel Cool Down (extension; with Start/Stop) |
+| Automatic / Manual | `0x0201F320` / `0x0201FF20` | byte0 **bit3** Auto / **bit2** Manual | FC01 coil **4** / **5** | **confirmed** bits; PDU 4/5 so CoolDown stays on 3 |
 | CoolDownTimer | `0x0201FF14` | byte4 countdown (~1 s/step) | FC04 PDU **29** | seconds (0 if not cooling) |
 | Engine hours | `0x0201FF13` | u24 LE minutes @ 0–2 | FC04 PDU **41** / **42** | hh + mm:ss |
 
@@ -178,19 +178,19 @@ Corroborating (not used for coils):
 
 If you need to re-hunt another signal, set `-DFUEL_HUNT_ENABLE=1` in `platformio.ini` and use the workflow below.
 
-### Start-up / Stop / Auto / Manual / CoolDown coils (**confirmed** reads)
+### Start / Stop / CoolDown / Auto / Manual coils (**confirmed** reads)
 
 Reads (not commands):
 - Coil **1** Start-up → `1` if operating (`F320` byte0 **bit6** clear)
 - Coil **2** Stop → `1` if stopped (`F320` byte0 **bit6** set)
-- Coil **3** Automatic → `1` if Auto (`F320` byte0 **bit3**) — **user-confirmed**
-- Coil **4** Manual → `1` if Manual (`F320` byte0 **bit2**) — **user-confirmed**
-- Coil **15** CoolDown → `1` while cool-down active (**extension**)
+- Coil **3** CoolDown → `1` while cool-down active (**extension**; latch unchanged)
+- Coil **4** Automatic → `1` if Auto (`F320` byte0 **bit3**) — **user-confirmed**
+- Coil **5** Manual → `1` if Manual (`F320` byte0 **bit2**) — **user-confirmed**
 
-Node-RED: FC **1**, address **1**, quantity **4** → `[Start, Stop, Automatic, Manual]`.  
-CoolDown: address **15**. Optional timer: FC **4** address **29**.
+Node-RED: FC **1**, address **1**, quantity **5** → `[Start, Stop, CoolDown, Automatic, Manual]`.  
+(Qty **3** still = Start/Stop/CoolDown only.) Optional timer: FC **4** address **29**.
 
-FC05 writes for Auto/Manual exist in CCMODBUS but are **not** forwarded to CAN yet (`CAN_LISTEN_ONLY`).
+Start/Stop/CoolDown decode is unchanged; Auto/Manual are additional. FC05 writes for mode exist in CCMODBUS but are **not** forwarded to CAN yet (`CAN_LISTEN_ONLY`).
 
 RPM (IR25) is independent telemetry and does **not** drive these coils.
 

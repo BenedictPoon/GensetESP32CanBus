@@ -125,6 +125,41 @@ bool cex7CanTryDecodeEngineHoursMinutes(const CanFrame& frame, uint32_t& totalMi
   return true;
 }
 
+// Engine RPM (CCMODBUS IR 25): same status frame as fuel/battery, bytes 6–7 LE.
+// Telemetry only — does not drive Start/Stop coils.
+bool cex7CanTryDecodeEngineRpm(const CanFrame& frame, uint16_t& rpmOut) {
+  static constexpr uint32_t kRpmCanId = 0x0201FF05;
+  static constexpr uint8_t kRpmByteIndex = 6;
+
+  if (!frame.extended || frame.id != kRpmCanId) {
+    return false;
+  }
+  if (frame.dlc < kRpmByteIndex + 2) {
+    return false;
+  }
+  rpmOut = static_cast<uint16_t>(frame.data[kRpmByteIndex] |
+                                 (static_cast<uint16_t>(frame.data[kRpmByteIndex + 1]) << 8));
+  return true;
+}
+
+// Start/Stop from controller phase frame.
+// 0x0201F320 / 0x0201FF20 byte0 bit6 (0x40): 1=stopped (e.g. CB), 0=operating (e.g. 8B).
+bool cex7CanTryDecodeRunState(const CanFrame& frame, bool& operatingOut) {
+  static constexpr uint32_t kPhaseCanIdA = 0x0201F320;
+  static constexpr uint32_t kPhaseCanIdB = 0x0201FF20;
+  static constexpr uint8_t kStoppedBitMask = 0x40;  // byte0 bit6
+
+  if (!frame.extended || (frame.id != kPhaseCanIdA && frame.id != kPhaseCanIdB)) {
+    return false;
+  }
+  if (frame.dlc < 1) {
+    return false;
+  }
+  const bool stopped = (frame.data[0] & kStoppedBitMask) != 0;
+  operatingOut = !stopped;
+  return true;
+}
+
 #if FUEL_HUNT_ENABLE
 // Scan one frame's payload for encodings of target tank %.
 static void huntFuelInStat(const CanIdStat& st, uint16_t targetPct) {
@@ -212,8 +247,23 @@ static void huntFuelInStat(const CanIdStat& st, uint16_t targetPct) {
 #endif
 
 void cex7CanOnFrame(Cex7CanState& state, const CanFrame& frame, GensetRegisters& regs) {
+  // Known IDs only: status (fuel/batt/rpm), hours, run-state phase
+  static constexpr uint32_t kStatusCanId = 0x0201FF05;
+  static constexpr uint32_t kHoursCanId = 0x0201FF13;
+  static constexpr uint32_t kPhaseCanIdA = 0x0201F320;
+  static constexpr uint32_t kPhaseCanIdB = 0x0201FF20;
+
+  const bool known = frame.extended &&
+                     (frame.id == kStatusCanId || frame.id == kHoursCanId ||
+                      frame.id == kPhaseCanIdA || frame.id == kPhaseCanIdB);
+  if (!known) {
+    return;
+  }
+
+#if RUN_STATE_HUNT_ENABLE || FUEL_HUNT_ENABLE
   pushRing(state, frame);
   trackId(state, frame);
+#endif
   state.framesSincePrint++;
   regs.canRxCount = canTwaiRxCount();
   regs.canUniqueIds = state.uniqueIdCount;
@@ -245,6 +295,16 @@ void cex7CanOnFrame(Cex7CanState& state, const CanFrame& frame, GensetRegisters&
   if (cex7CanTryDecodeEngineHoursMinutes(frame, hoursMin)) {
     registersSetEngineHoursFromMinutes(regs, hoursMin);
   }
+
+  uint16_t rpm = 0;
+  if (cex7CanTryDecodeEngineRpm(frame, rpm)) {
+    registersSetEngineRpm(regs, rpm);  // IR25 only — does not set Start/Stop
+  }
+
+  bool operating = false;
+  if (cex7CanTryDecodeRunState(frame, operating)) {
+    registersSetRunState(regs, operating);  // coils 1/2 from F320 bit6
+  }
 }
 
 void cex7CanPrintStats(Cex7CanState& state, const GensetRegisters& regs) {
@@ -256,78 +316,34 @@ void cex7CanPrintStats(Cex7CanState& state, const GensetRegisters& regs) {
   const uint32_t elapsed = now - state.lastPrintMs;
   const float fps = elapsed > 0 ? (state.framesSincePrint * 1000.0f) / elapsed : 0.0f;
 
+  // Slim production status (no full ID dump / hunt)
   Serial.println(F("---- status ----"));
-  Serial.printf("CAN rx=%lu tx=%lu err=%lu unique_ids=%lu ~%.1f frame/s listen_only=%d\n",
+  Serial.printf("CAN rx=%lu tx=%lu err=%lu mapped_fps=%.1f listen_only=%d\n",
                 static_cast<unsigned long>(canTwaiRxCount()),
                 static_cast<unsigned long>(canTwaiTxCount()),
-                static_cast<unsigned long>(canTwaiErrorCount()),
-                static_cast<unsigned long>(state.uniqueIdCount), fps,
+                static_cast<unsigned long>(canTwaiErrorCount()), fps,
                 canTwaiIsListenOnly() ? 1 : 0);
-  Serial.printf("Fuel IR[%u]=%u ‰ (%.1f%%) valid=%d mapping=%d hunt=%u%%\n",
+  Serial.printf("Fuel IR[%u]=%u ‰ (%.1f%%)  Batt IR[%u]=%u dV (%.1f V)\n",
                 static_cast<unsigned>(RegPdu::kIrFuelLevel),
                 regs.inputRegs[RegPdu::kIrFuelLevel], registersFuelPercent(regs),
-                regs.fuelValid ? 1 : 0, state.mappingConfigured ? 1 : 0,
-                static_cast<unsigned>(FUEL_HUNT_PERCENT));
-  Serial.printf("Batt IR[%u]=%u dV (%.1f V) valid=%d\n",
                 static_cast<unsigned>(RegPdu::kIrBatteryDv),
                 regs.inputRegs[RegPdu::kIrBatteryDv],
-                regs.inputRegs[RegPdu::kIrBatteryDv] / 10.0f,
-                regs.batteryValid ? 1 : 0);
+                regs.inputRegs[RegPdu::kIrBatteryDv] / 10.0f);
+  Serial.printf("RPM  IR[%u]=%u\n",
+                static_cast<unsigned>(RegPdu::kIrSpeedRpm),
+                regs.inputRegs[RegPdu::kIrSpeedRpm]);
+  Serial.printf("Start=%d Stop=%d  (from F320/FF20 byte0 bit6)\n",
+                regs.coils[RegPdu::kCoilStartUp] ? 1 : 0,
+                regs.coils[RegPdu::kCoilStop] ? 1 : 0);
   {
     const uint16_t hh = regs.inputRegs[RegPdu::kIrEngineHoursHh];
     const uint16_t mmSs = regs.inputRegs[RegPdu::kIrEngineHoursMmSs];
     const uint8_t mm = static_cast<uint8_t>((mmSs >> 8) & 0xFFu);
     const uint8_t ss = static_cast<uint8_t>(mmSs & 0xFFu);
-    Serial.printf("Hours IR[%u]=%u h  IR[%u]=%02u:%02u valid=%d\n",
+    Serial.printf("Hours IR[%u]=%u h  IR[%u]=%02u:%02u\n",
                   static_cast<unsigned>(RegPdu::kIrEngineHoursHh), hh,
-                  static_cast<unsigned>(RegPdu::kIrEngineHoursMmSs), mm, ss,
-                  regs.engineHoursValid ? 1 : 0);
+                  static_cast<unsigned>(RegPdu::kIrEngineHoursMmSs), mm, ss);
   }
-
-  // Sort indices by CAN ID for stable dump of ALL IDs (not just first 16)
-  size_t order[kMaxTrackedIds];
-  size_t nUsed = 0;
-  for (size_t i = 0; i < kMaxTrackedIds; ++i) {
-    if (state.idStats[i].used) {
-      order[nUsed++] = i;
-    }
-  }
-  for (size_t a = 0; a + 1 < nUsed; ++a) {
-    for (size_t b = a + 1; b < nUsed; ++b) {
-      if (state.idStats[order[b]].id < state.idStats[order[a]].id) {
-        const size_t tmp = order[a];
-        order[a] = order[b];
-        order[b] = tmp;
-      }
-    }
-  }
-
-  Serial.println(F("CAN IDs seen ALL (sorted):"));
-  for (size_t k = 0; k < nUsed; ++k) {
-    const CanIdStat& st = state.idStats[order[k]];
-    Serial.printf("  0x%08lX %s x%lu  [", static_cast<unsigned long>(st.id),
-                  st.extended ? "EXT" : "STD", static_cast<unsigned long>(st.count));
-    for (uint8_t b = 0; b < st.lastDlc; ++b) {
-      Serial.printf("%02X", st.lastData[b]);
-      if (b + 1 < st.lastDlc) {
-        Serial.print(' ');
-      }
-    }
-    Serial.println(']');
-  }
-  if (nUsed == 0) {
-    Serial.println(F("  (none yet — check CAN wiring, 50 kbit/s, terminators)"));
-  }
-
-#if FUEL_HUNT_ENABLE
-  Serial.printf("FUEL HUNT for %u%% (= %u ‰):\n",
-                static_cast<unsigned>(FUEL_HUNT_PERCENT),
-                static_cast<unsigned>(FUEL_HUNT_PERCENT) * 10);
-  for (size_t k = 0; k < nUsed; ++k) {
-    huntFuelInStat(state.idStats[order[k]], FUEL_HUNT_PERCENT);
-  }
-  Serial.println(F("(If no >>> lines: 71% not in last payloads — paste the full ALL IDs list)"));
-#endif
 
   state.framesSincePrint = 0;
   state.lastPrintMs = now;

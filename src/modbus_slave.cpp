@@ -104,6 +104,23 @@ void modbusSlaveSyncFromRegisters(GensetRegisters& regs) {
   }
 }
 
+void modbusSlaveSyncLive(GensetRegisters& regs) {
+  // Coils used for run state (and keep full coil bank small/cheap)
+  mb.Coil(RegPdu::kCoilStartUp, regs.coils[RegPdu::kCoilStartUp]);
+  mb.Coil(RegPdu::kCoilStop, regs.coils[RegPdu::kCoilStop]);
+  mb.Coil(RegPdu::kCoilFuelTransferPump, regs.coils[RegPdu::kCoilFuelTransferPump]);
+
+  mb.Ists(RegPdu::kDiscreteFuelReserve, regs.discrete[RegPdu::kDiscreteFuelReserve]);
+  mb.Ists(RegPdu::kDiscreteLowFuelLevel, regs.discrete[RegPdu::kDiscreteLowFuelLevel]);
+
+  mb.Ireg(RegPdu::kIrSpeedRpm, regs.inputRegs[RegPdu::kIrSpeedRpm]);
+  mb.Ireg(RegPdu::kIrFuelLevel, regs.inputRegs[RegPdu::kIrFuelLevel]);
+  mb.Ireg(RegPdu::kIrBatteryDv, regs.inputRegs[RegPdu::kIrBatteryDv]);
+  mb.Ireg(RegPdu::kIrSensorPresence, regs.inputRegs[RegPdu::kIrSensorPresence]);
+  mb.Ireg(RegPdu::kIrEngineHoursHh, regs.inputRegs[RegPdu::kIrEngineHoursHh]);
+  mb.Ireg(RegPdu::kIrEngineHoursMmSs, regs.inputRegs[RegPdu::kIrEngineHoursMmSs]);
+}
+
 void modbusSlaveTask() {
   mb.task();
 }

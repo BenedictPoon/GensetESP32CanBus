@@ -11,6 +11,9 @@ struct CanIdStat {
   uint32_t count;
   uint8_t lastData[8];
   uint8_t lastDlc;
+  uint8_t prevData[8];   // snapshot at last status print (run-state hunt)
+  uint8_t prevDlc;
+  bool prevValid;
   bool extended;
   bool used;
 };
@@ -40,3 +43,6 @@ void cex7CanPrintStats(Cex7CanState& state, const GensetRegisters& regs);
 bool cex7CanTryDecodeFuel(const Cex7CanState& state, const CanFrame& frame, uint16_t& permilleOut);
 bool cex7CanTryDecodeBatteryDv(const CanFrame& frame, uint16_t& deciVoltsOut);
 bool cex7CanTryDecodeEngineHoursMinutes(const CanFrame& frame, uint32_t& totalMinutesOut);
+bool cex7CanTryDecodeEngineRpm(const CanFrame& frame, uint16_t& rpmOut);
+// Start/Stop from 0x0201F320 / 0x0201FF20 byte0 bit6 (0x40): set=stopped
+bool cex7CanTryDecodeRunState(const CanFrame& frame, bool& operatingOut);

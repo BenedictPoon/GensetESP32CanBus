@@ -35,10 +35,16 @@ void registersSetFuelPermille(GensetRegisters& regs, uint16_t permille);
 float registersFuelPercent(const GensetRegisters& regs);
 void registersSetBatteryDv(GensetRegisters& regs, uint16_t deciVolts);
 void registersSetEngineHoursFromMinutes(GensetRegisters& regs, uint32_t totalMinutes);
+void registersSetEngineRpm(GensetRegisters& regs, uint16_t rpm);
+// Start/Stop coils from CAN status bit (not RPM).
+void registersSetRunState(GensetRegisters& regs, bool operating);
 
 // Named PDU addresses (Table 6 / coils / discrete)
 namespace RegPdu {
   // Coils
+  constexpr uint16_t kCoilReset            = 0;
+  constexpr uint16_t kCoilStartUp          = 1;  // 1 = genset operating (read)
+  constexpr uint16_t kCoilStop             = 2;  // 1 = genset stopped (read)
   constexpr uint16_t kCoilFuelTransferPump = 7;
 
   // Discrete / input status

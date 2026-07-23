@@ -29,23 +29,26 @@ void setup() {
     Serial.println(F("[FATAL] Modbus slave init failed"));
   }
 
-  Serial.println(F("Ready. Poll Modbus FC04:"));
-  Serial.println(F("  IR 26 fuel ‰ (CAN 0x0201FF05 u16LE @0)"));
-  Serial.println(F("  IR 28 battery dV (CAN 0x0201FF05 u8 @4)"));
-  Serial.println(F("  IR 41/42 engine hours (CAN 0x0201FF13 u24LE minutes)"));
+  modbusSlaveSyncFromRegisters(gRegs);
+
+  Serial.println(F("Ready. Poll Modbus FC04 / FC01:"));
+  Serial.println(F("  IR 26 fuel ‰ | IR 28 batt dV | IR 25 rpm"));
+  Serial.println(F("  FC01 addr 1 qty 2 → [Start, Stop]  (F320 bit6, not RPM)"));
+  Serial.println(F("  IR 41/42 engine hours"));
+  Serial.println(F("CAN: FF05 fuel/batt/rpm | FF13 hours | F320/FF20 Start/Stop"));
   Serial.println();
 }
 
 void loop() {
-  // Drain CAN RX queue
+  // Drain CAN RX; service Modbus between frames so polls are not delayed
   CanFrame frame;
   while (canTwaiReceive(frame)) {
     cex7CanOnFrame(gCex7, frame, gRegs);
+    modbusSlaveTask();
   }
   canTwaiTask();
 
-  // Keep Modbus image in sync with decoded registers
-  modbusSlaveSyncFromRegisters(gRegs);
+  modbusSlaveSyncLive(gRegs);
   modbusSlaveTask();
 
   cex7CanPrintStats(gCex7, gRegs);

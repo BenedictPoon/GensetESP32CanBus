@@ -63,3 +63,14 @@ void registersSetEngineHoursFromMinutes(GensetRegisters& regs, uint32_t totalMin
   regs.engineHoursValid = true;
   regs.lastEngineHoursUpdateMs = millis();
 }
+
+void registersSetEngineRpm(GensetRegisters& regs, uint16_t rpm) {
+  // CCMODBUS Input Register PDU 25: Speed rpm (telemetry only)
+  regs.inputRegs[RegPdu::kIrSpeedRpm] = rpm;
+}
+
+void registersSetRunState(GensetRegisters& regs, bool operating) {
+  // CCMODBUS coils PDU 1 Start-up / PDU 2 Stop — mutually exclusive read status
+  regs.coils[RegPdu::kCoilStartUp] = operating;
+  regs.coils[RegPdu::kCoilStop] = !operating;
+}

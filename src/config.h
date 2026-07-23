@@ -30,7 +30,13 @@ static constexpr uint32_t kCanSniffPrintMs = 500;
 #endif
 
 #ifndef FUEL_HUNT_ENABLE
-#define FUEL_HUNT_ENABLE 1
+#define FUEL_HUNT_ENABLE 0
+#endif
+
+// Diff-hunt for Start-up / Stop coil status (CCMODBUS coils PDU 1 / 2).
+// Toggle genset run/stop and watch Serial for CHANGED IDs / bit flips.
+#ifndef RUN_STATE_HUNT_ENABLE
+#define RUN_STATE_HUNT_ENABLE 0
 #endif
 
 // CCMODBUS fuel input register (PDU address)

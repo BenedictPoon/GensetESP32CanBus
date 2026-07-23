@@ -152,20 +152,37 @@ Also readable:
 
 ## 6. Fuel / battery / hours CAN mapping (confirmed)
 
-| Signal | CAN ID | Decode | Modbus (FC04) | Unit |
-|--------|--------|--------|---------------|------|
-| Fuel | `0x0201FF05` | u16 LE @ bytes 0–1 | PDU **26** | ‰ (÷10 → %) |
-| Start battery | `0x0201FF05` | u8 @ byte 4 | PDU **28** | dV (÷10 → V) |
-| Engine hours | `0x0201FF13` | u24 LE @ bytes 0–2 (minutes) | PDU **41** hours, **42** mm:ss | hh + packed mm:ss |
+| Signal | CAN ID | Decode | Modbus | Unit |
+|--------|--------|--------|--------|------|
+| Fuel | `0x0201FF05` | u16 LE @ bytes 0–1 | FC04 PDU **26** | ‰ (÷10 → %) |
+| Start battery | `0x0201FF05` | u8 @ byte 4 | FC04 PDU **28** | dV (÷10 → V) |
+| Engine RPM | `0x0201FF05` | u16 LE @ bytes 6–7 | FC04 PDU **25** | rpm (telemetry only) |
+| Start-up / Stop | `0x0201F320` / `0x0201FF20` | byte0 **bit6** (`0x40`): set=stopped | FC01 coil **1** / **2** | Start=`!bit6`, Stop=`bit6` |
+| Engine hours | `0x0201FF13` | u24 LE minutes @ 0–2 | FC04 PDU **41** / **42** | hh + mm:ss |
 
 Examples from capture:
 - Fuel `C5 02` → 709 ‰ ≈ 70.9%
-- Battery `7B` → 123 dV = 12.3 V
+- Battery stopped `7D` → 12.5 V; running `90` → 14.4 V (alternator charging)
+- RPM stopped `00 00` → 0; running `36 06` → **1590** rpm (IR25 only)
+- Start/Stop: F320 byte0 `CB` (bit6=1) → Stop; `8B` (bit6=0) → Start
 - Hours `BC A3 04` → 304060 min ≈ 5067 h + 40 min
+
+Corroborating (not used for coils):
+- `0x00010600` `[00 00]` stopped → `[A0 ..]` running
 
 ### Older reverse-engineering notes
 
 If you need to re-hunt another signal, set `-DFUEL_HUNT_ENABLE=1` in `platformio.ini` and use the workflow below.
+
+### Start-up / Stop coils (CCMODBUS PDU 1 / 2)
+
+Reads (not commands):
+- Coil **1** Start-up → `1` if genset is **operating** (`F320` byte0 bit6 clear)
+- Coil **2** Stop → `1` if genset is **stopped** (`F320` byte0 bit6 set)
+
+Node-RED: FC **1**, address **1**, quantity **2** → `msg.payload = [startUp, stop]`.
+
+RPM (IR25) is independent telemetry and does **not** drive these coils.
 
 1. Flash this firmware with **listen-only CAN** (default: `CAN_LISTEN_ONLY=1` in `platformio.ini` `build_flags`).
 2. Leave the **real CCMODBUS** connected to the CEx7 CAN bus.

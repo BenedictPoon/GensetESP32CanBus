@@ -24,6 +24,9 @@ void cex7CanInit(Cex7CanState& state) {
     state.coolCand[i].id = 0;
     state.coolCand[i].lastDlc = 0;
     state.coolCand[i].valid = false;
+    state.modeCand[i].id = 0;
+    state.modeCand[i].lastDlc = 0;
+    state.modeCand[i].valid = false;
   }
   state.lastCoolDownPrintedValid = false;
   state.lastCoolDownPrinted = false;
@@ -164,6 +167,29 @@ bool cex7CanTryDecodeRunState(const CanFrame& frame, bool& operatingOut) {
   }
   const bool stopped = (frame.data[0] & kStoppedBitMask) != 0;
   operatingOut = !stopped;
+  return true;
+}
+
+// Automatic / Manual from phase frame byte0 (same IDs as Start/Stop).
+// Capture (ended in Auto): CB↔C7, xor=0x0C — bit3 Auto, bit2 Manual.
+//   Auto  (CB): bit3=1 bit2=0
+//   Manual(C7): bit3=0 bit2=1
+// Does not modify Start/Stop (bit6).
+bool cex7CanTryDecodeControlMode(const CanFrame& frame, bool& automaticOut,
+                                 bool& manualOut) {
+  static constexpr uint32_t kPhaseCanIdA = 0x0201F320;
+  static constexpr uint32_t kPhaseCanIdB = 0x0201FF20;
+  static constexpr uint8_t kAutoBitMask = 0x08;    // byte0 bit3
+  static constexpr uint8_t kManualBitMask = 0x04;  // byte0 bit2
+
+  if (!frame.extended || (frame.id != kPhaseCanIdA && frame.id != kPhaseCanIdB)) {
+    return false;
+  }
+  if (frame.dlc < 1) {
+    return false;
+  }
+  automaticOut = (frame.data[0] & kAutoBitMask) != 0;
+  manualOut = (frame.data[0] & kManualBitMask) != 0;
   return true;
 }
 
@@ -328,6 +354,100 @@ static void coolCandWatch(Cex7CanState& state, const CanFrame& frame,
 }
 #endif
 
+#if MODE_HUNT_ENABLE
+// Auto/Manual/Test/Lock mode hunt — press panel buttons, paste [MODE-CAND] lines.
+static bool isModeCandId(uint32_t id) {
+  return id == 0x00010600u || id == 0x0201F320u || id == 0x0201FF20u ||
+         id == 0x0201FF00u || id == 0x0201FF14u || id == 0x0201FF24u ||
+         id == 0x0201F302u || id == 0x0201FF02u || id == 0x02020100u ||
+         id == 0x0202FF00u;
+}
+
+static void modeCandWatch(Cex7CanState& state, const CanFrame& frame,
+                          const GensetRegisters& regs) {
+  if (!frame.extended || !isModeCandId(frame.id)) {
+    return;
+  }
+
+  CoolCandSlot* slot = nullptr;
+  for (size_t i = 0; i < kCoolCandSlots; ++i) {
+    if (state.modeCand[i].valid && state.modeCand[i].id == frame.id) {
+      slot = &state.modeCand[i];
+      break;
+    }
+  }
+  if (slot == nullptr) {
+    for (size_t i = 0; i < kCoolCandSlots; ++i) {
+      if (!state.modeCand[i].valid) {
+        slot = &state.modeCand[i];
+        slot->id = frame.id;
+        slot->valid = true;
+        slot->lastDlc = 0;
+        break;
+      }
+    }
+  }
+  if (slot == nullptr) {
+    return;
+  }
+
+  const uint8_t n = frame.dlc > 8 ? 8 : frame.dlc;
+  const bool changed =
+      (slot->lastDlc != n) || (memcmp(slot->lastData, frame.data, n) != 0);
+  if (!changed) {
+    return;
+  }
+
+  Serial.printf("[MODE-CAND] 0x%08lX ", static_cast<unsigned long>(frame.id));
+  if (slot->lastDlc > 0) {
+    for (uint8_t i = 0; i < slot->lastDlc; ++i) {
+      Serial.printf("%02X", slot->lastData[i]);
+      if (i + 1 < slot->lastDlc) {
+        Serial.print(' ');
+      }
+    }
+    Serial.print(F(" → "));
+  }
+  for (uint8_t i = 0; i < n; ++i) {
+    Serial.printf("%02X", frame.data[i]);
+    if (i + 1 < n) {
+      Serial.print(' ');
+    }
+  }
+  if (frame.id == 0x0201F320u || frame.id == 0x0201FF20u) {
+    Serial.printf("  b0=%02X bit6=%u byte1=%02X byte2=%02X",
+                  frame.data[0], (frame.data[0] >> 6) & 1u,
+                  (n > 1) ? frame.data[1] : 0, (n > 2) ? frame.data[2] : 0);
+    // Highlight bits that flipped in byte0 (mode flags often live here)
+    if (slot->lastDlc > 0) {
+      const uint8_t xor0 = static_cast<uint8_t>(slot->lastData[0] ^ frame.data[0]);
+      if (xor0 != 0) {
+        Serial.printf("  byte0_xor=%02X", xor0);
+        for (uint8_t bit = 0; bit < 8; ++bit) {
+          if (xor0 & (1u << bit)) {
+            Serial.printf(" b0.%u:%u→%u", bit, (slot->lastData[0] >> bit) & 1u,
+                          (frame.data[0] >> bit) & 1u);
+          }
+        }
+      }
+      if (n > 1 && slot->lastDlc > 1) {
+        const uint8_t xor1 = static_cast<uint8_t>(slot->lastData[1] ^ frame.data[1]);
+        if (xor1 != 0) {
+          Serial.printf("  byte1_xor=%02X", xor1);
+        }
+      }
+    }
+  }
+  Serial.printf("  | Start=%d Stop=%d CoolDown=%d\n",
+                regs.coils[RegPdu::kCoilStartUp] ? 1 : 0,
+                regs.coils[RegPdu::kCoilStop] ? 1 : 0,
+                regs.coolDown ? 1 : 0);
+
+  memcpy(slot->lastData, frame.data, n);
+  slot->lastDlc = n;
+}
+#endif
+
 #if FUEL_HUNT_ENABLE
 // Scan one frame's payload for encodings of target tank %.
 static void huntFuelInStat(const CanIdStat& st, uint16_t targetPct) {
@@ -467,6 +587,19 @@ void cex7CanOnFrame(Cex7CanState& state, const CanFrame& frame, GensetRegisters&
       registersSetRunState(regs, operating);  // coils 1/2 from F320 bit6 only
     }
 
+    bool automatic = false;
+    bool manual = false;
+    if (cex7CanTryDecodeControlMode(frame, automatic, manual)) {
+      const bool prevAuto = regs.coils[RegPdu::kCoilAutomatic];
+      const bool prevMan = regs.coils[RegPdu::kCoilManual];
+      registersSetControlMode(regs, automatic, manual);
+      if (automatic != prevAuto || manual != prevMan) {
+        Serial.printf("[NOTE] Mode Auto %d→%d  Manual %d→%d  (F320 byte0 bit3/bit2)\n",
+                      prevAuto ? 1 : 0, automatic ? 1 : 0, prevMan ? 1 : 0,
+                      manual ? 1 : 0);
+      }
+    }
+
 #if COOLDOWN_MAP_ENABLE
     bool coolDown = false;
     if (cex7CanTryDecodeCoolDown(frame, coolDown)) {
@@ -506,6 +639,9 @@ void cex7CanOnFrame(Cex7CanState& state, const CanFrame& frame, GensetRegisters&
 #if COOLDOWN_CAND_WATCH
   coolCandWatch(state, frame, regs);
 #endif
+#if MODE_HUNT_ENABLE
+  modeCandWatch(state, frame, regs);
+#endif
 }
 
 void cex7CanPrintStats(Cex7CanState& state, const GensetRegisters& regs) {
@@ -525,9 +661,11 @@ void cex7CanPrintStats(Cex7CanState& state, const GensetRegisters& regs) {
                 regs.inputRegs[RegPdu::kIrBatteryDv] / 10.0f,
                 regs.inputRegs[RegPdu::kIrSpeedRpm],
                 regs.inputRegs[RegPdu::kIrEngineHoursHh]);
-  Serial.printf("Start=%d  Stop=%d  CoolDown=%d",
+  Serial.printf("Start=%d  Stop=%d  Auto=%d  Manual=%d  CoolDown=%d",
                 regs.coils[RegPdu::kCoilStartUp] ? 1 : 0,
                 regs.coils[RegPdu::kCoilStop] ? 1 : 0,
+                regs.coils[RegPdu::kCoilAutomatic] ? 1 : 0,
+                regs.coils[RegPdu::kCoilManual] ? 1 : 0,
                 regs.coolDown ? 1 : 0);
 #if COOLDOWN_TIMER_ENABLE
   if (regs.coolDownTimerValid) {

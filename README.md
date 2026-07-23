@@ -28,15 +28,28 @@ All IDs below are **extended** frames unless noted. Mapping was done from live b
 |--------|------|--------|---------|
 | `0x0201FF05` | Status: fuel, battery, RPM | Fuel u16 LE @ bytes 0–1 (‰); battery u8 @ byte 4 (dV); RPM u16 LE @ bytes 6–7 | Modbus IR **26** fuel, IR **28** batt, IR **25** rpm |
 | `0x0201FF13` | Engine hours | u24 LE minutes @ bytes 0–2 | IR **41** hh, IR **42** mm:ss |
-| `0x0201F320` / `0x0201FF20` | Phase / run state (same payload on both IDs) | **byte0 bit6 (`0x40`)**: set = stopped → coil **Stop**; clear = operating → coil **Start** | Coils PDU **1** Start, **2** Stop |
+| `0x0201F320` / `0x0201FF20` | Phase / run state (same payload on both IDs) | **byte0 bit6 (`0x40`)**: Start/Stop; **bit3 (`0x08`)**: Automatic; **bit2 (`0x04`)**: Manual | Coils **1/2/3/4** |
 
 Start/Stop are **not** derived from RPM.
+
+### Automatic / Manual mode (confirmed)
+
+Same CAN IDs as Start/Stop: `0x0201F320` / `0x0201FF20`. Panel Auto↔Manual toggles **byte0 bits 2 and 3** only (`xor=0x0C`); bit6 (Start/Stop) is unchanged.
+
+| Panel | F320 byte0 (stopped example) | bit3 (`0x08`) | bit2 (`0x04`) | Coil 3 Auto | Coil 4 Manual |
+|-------|------------------------------|---------------|---------------|-------------|---------------|
+| **Automatic** | `CB` | 1 | 0 | **1** | 0 |
+| **Manual** | `C7` | 1→0 | 0→1 | 0 | **1** |
+
+Live capture (user-confirmed): `CB ↔ C7` on button press; final state Auto = `CB`.
+
+Firmware: `cex7CanTryDecodeControlMode()` → Modbus FC01 coils **3** / **4**. Serial shows `Auto=` / `Manual=` on status and `[NOTE] Mode Auto …` on change.
 
 ### Cool-down
 
 | CAN ID | Role | Decode | Notes |
 |--------|------|--------|-------|
-| `0x0201F320` / `0x0201FF20` | Cool-down **start pulse** | While Start=1: **byte1=`0x2C`** and **byte2 bit4 clear** (`10`→`00`) | Arms `CoolDown=1`. Bit4 alone is a short pulse (timer start), not the full cool-down interval. Firmware **latches** `CoolDown` until Stop. |
+| `0x0201F320` / `0x0201FF20` | Cool-down **start pulse** | While Start=1: **byte1=`0x2C`** and **byte2 bit4 clear** (`10`→`00`) | Arms `CoolDown=1` (Modbus coil **15**). Latch until Stop. |
 | `0x0201FF14` | Cool-down **countdown timer** | **byte4** counts down once per ~1 s (e.g. `B3`→`00` ≈ 179 s) | Example: `33 02 08 00 3D 00 00 00` → `… 3C …`. Also used as a short crank timer on start. Enable with `-DCOOLDOWN_TIMER_ENABLE=1`. |
 | `0x00010600` | Mode / phase companion | Running often `A0 2A` or `A0 40`; at cool→stop hand-off → `04 42`; fully stopped → `00 00` | Correlates with F320 phase; not used for Start/Stop coils. |
 | `0x0201FF24` | Correlated flag | Often `00 0E` ↔ `00 0A` with cool-down pulse / load changes | Supporting signal only. |
@@ -73,7 +86,7 @@ Start/Stop are **not** derived from RPM.
 | `COOLDOWN_TIMER_ENABLE` | `0` | Set to **`1`** for extra Serial `[NOTE]` lines on timer changes (IR 29 always updated) |
 | `COOLDOWN_CAND_WATCH` | `0` | Print `[CAND]` focus-ID changes (discovery only) |
 | `RUN_STATE_HUNT_ENABLE` | `0` | Full-bus ID dump / diffs |
-| `FUEL_HUNT_ENABLE` | `0` | Fuel reverse-engineering hunt |
+| `MODE_HUNT_ENABLE` | `0` | Auto/Manual discovery (mapped; keep off) |
 
 Enable the cool-down timer:
 
@@ -94,12 +107,26 @@ Then status shows e.g. `CoolDown=1  CoolDownTimer=61`.
 | FC04 IR | 28 | Battery (dV) |
 | FC04 IR | 29 | CoolDownTimer (seconds remaining; **extension**) |
 | FC04 IR | 41 / 42 | Engine hours |
-| FC01 coils | 1 / 2 / **3** | Start / Stop / **CoolDown** |
+| FC01 coils | 1 / 2 | Start / Stop (F320 byte0 **bit6**) |
+| FC01 coil | **3** | **Automatic** — confirmed (F320 byte0 **bit3**) |
+| FC01 coil | **4** | **Manual** — confirmed (F320 byte0 **bit2**) |
+| FC01 coil | 5 / 6 | Test / Locked (CCMODBUS; unmapped) |
+| FC01 coil | **15** | **CoolDown** (extension) |
 
 ### Node-RED
 
-- **FC1**, address **1**, quantity **3** → `[Start, Stop, CoolDown]`
-- CoolDown alone: FC1 address **3**, quantity **1**
-- Optional timer: FC4 address **29**, quantity **1** (seconds while CoolDown=1, else 0)
+- Start/Stop: FC1 address **1**, quantity **2** → `[Start, Stop]`
+- Auto/Manual: FC1 address **3**, quantity **2** → `[Automatic, Manual]`
+- Or qty **4** from addr 1 → `[Start, Stop, Automatic, Manual]`  
+  - Auto: `[false, true, true, false]` (stopped + Auto)  
+  - Manual: `[false, true, false, true]` (stopped + Manual)
+- CoolDown: FC1 address **15**, quantity **1**
+- Optional timer: FC4 address **29**, quantity **1**
 
-Start/Stop still come from F320 bit6 only; CoolDown is latched separately and cleared on Stop.
+### Software control of Auto/Manual later?
+
+**Read path is done** (coils 3/4 from CAN). CCMODBUS **FC05** (force single coil) also documents:
+- Coil **3** write → command Automatic mode  
+- Coil **4** write → command Manual mode  
+
+Commanding from Node-RED later needs matching **CAN TX** frames and `CAN_LISTEN_ONLY=0`. Today writes are local only and are not forwarded to CEx7.

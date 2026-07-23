@@ -43,9 +43,14 @@ static constexpr uint32_t kCanSniffPrintMs = 500;
 #define COOLDOWN_MAP_ENABLE 1
 #endif
 
-// Optional CoolDownTimer from 0x0201FF14 byte4 countdown (set 1 to enable).
+// Optional CoolDownTimer Serial notes from FF14 (IR 29 always updated).
 #ifndef COOLDOWN_TIMER_ENABLE
 #define COOLDOWN_TIMER_ENABLE 0
+#endif
+
+// Hunt Auto/Manual button presses: print focus-ID changes as [MODE-CAND].
+#ifndef MODE_HUNT_ENABLE
+#define MODE_HUNT_ENABLE 0
 #endif
 
 // Full-bus sniffer + payload diffs. Keep 0 for slim status view.

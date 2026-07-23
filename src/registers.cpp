@@ -78,9 +78,15 @@ void registersSetRunState(GensetRegisters& regs, bool operating) {
   regs.coils[RegPdu::kCoilStop] = !operating;
 }
 
+// CCMODBUS coils 3/4 — Auto/Manual (does not touch Start/Stop).
+void registersSetControlMode(GensetRegisters& regs, bool automatic, bool manual) {
+  regs.coils[RegPdu::kCoilAutomatic] = automatic;
+  regs.coils[RegPdu::kCoilManual] = manual;
+}
+
 void registersSetCoolDown(GensetRegisters& regs, bool coolDown) {
   regs.coolDown = coolDown;
-  // Modbus FC01 coil PDU 3 — read status for Node-RED (does not affect Start/Stop)
+  // Modbus FC01 coil PDU 15 — CoolDown (extension; does not affect Start/Stop)
   regs.coils[RegPdu::kCoilCoolDown] = coolDown;
   if (!coolDown) {
     regs.inputRegs[RegPdu::kIrCoolDownTimer] = 0;

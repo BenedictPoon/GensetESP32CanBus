@@ -44,6 +44,7 @@ struct Cex7CanState {
   uint16_t fuelScaleNum;   // raw * num / den → ‰
   uint16_t fuelScaleDen;
   CoolCandSlot coolCand[kCoolCandSlots];
+  CoolCandSlot modeCand[kCoolCandSlots];
   bool lastCoolDownPrintedValid;
   bool lastCoolDownPrinted;
 };
@@ -61,3 +62,5 @@ bool cex7CanTryDecodeRunState(const CanFrame& frame, bool& operatingOut);
 bool cex7CanTryDecodeCoolDown(const CanFrame& frame, bool& coolDownOut);
 // Cool-down countdown seconds from 0x0201FF14 byte4 (optional)
 bool cex7CanTryDecodeCoolDownTimer(const CanFrame& frame, uint8_t& timerOut);
+// Auto/Manual from F320/FF20 byte0 bit3 / bit2 (does not touch Start/Stop)
+bool cex7CanTryDecodeControlMode(const CanFrame& frame, bool& automaticOut, bool& manualOut);

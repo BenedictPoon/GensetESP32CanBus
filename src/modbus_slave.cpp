@@ -108,6 +108,8 @@ void modbusSlaveSyncLive(GensetRegisters& regs) {
   // Coils used for run state (and keep full coil bank small/cheap)
   mb.Coil(RegPdu::kCoilStartUp, regs.coils[RegPdu::kCoilStartUp]);
   mb.Coil(RegPdu::kCoilStop, regs.coils[RegPdu::kCoilStop]);
+  mb.Coil(RegPdu::kCoilAutomatic, regs.coils[RegPdu::kCoilAutomatic]);
+  mb.Coil(RegPdu::kCoilManual, regs.coils[RegPdu::kCoilManual]);
   mb.Coil(RegPdu::kCoilCoolDown, regs.coils[RegPdu::kCoilCoolDown]);
   mb.Coil(RegPdu::kCoilFuelTransferPump, regs.coils[RegPdu::kCoilFuelTransferPump]);
 

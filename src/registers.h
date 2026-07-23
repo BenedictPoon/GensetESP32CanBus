@@ -43,6 +43,8 @@ void registersSetEngineHoursFromMinutes(GensetRegisters& regs, uint32_t totalMin
 void registersSetEngineRpm(GensetRegisters& regs, uint16_t rpm);
 // Start/Stop coils from CAN status bit (not RPM).
 void registersSetRunState(GensetRegisters& regs, bool operating);
+// Auto/Manual from F320 byte0 bit3/bit2 — does not touch Start/Stop.
+void registersSetControlMode(GensetRegisters& regs, bool automatic, bool manual);
 // CoolDown — does not touch Start/Stop coils.
 void registersSetCoolDown(GensetRegisters& regs, bool coolDown);
 void registersSetCoolDownTimer(GensetRegisters& regs, uint8_t secondsRemaining);
@@ -53,8 +55,13 @@ namespace RegPdu {
   constexpr uint16_t kCoilReset            = 0;
   constexpr uint16_t kCoilStartUp          = 1;  // 1 = genset operating (read)
   constexpr uint16_t kCoilStop             = 2;  // 1 = genset stopped (read)
-  constexpr uint16_t kCoilCoolDown         = 3;  // 1 = cool-down active (read; extension)
+  constexpr uint16_t kCoilAutomatic        = 3;  // CCMODBUS: 1 = automatic (F320 byte0 bit3)
+  constexpr uint16_t kCoilManual           = 4;  // CCMODBUS: 1 = manual (F320 byte0 bit2)
+  constexpr uint16_t kCoilTestMode         = 5;  // CCMODBUS: 1 = test mode (unmapped)
+  constexpr uint16_t kCoilLockedMode       = 6;  // CCMODBUS: 1 = lock mode (unmapped)
   constexpr uint16_t kCoilFuelTransferPump = 7;
+  // Extension (not in CCMODBUS table) — was briefly on PDU 3; moved to avoid Auto clash
+  constexpr uint16_t kCoilCoolDown         = 15; // 1 = cool-down active (read)
 
   // Discrete / input status
   constexpr uint16_t kDiscreteFuelReserve  = 6;
